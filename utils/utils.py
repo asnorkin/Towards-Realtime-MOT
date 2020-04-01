@@ -228,52 +228,47 @@ def bbox_iou(box1, box2, x1y1x2y2=False):
     return inter_area / (b1_area + b2_area - inter_area + 1e-16)
 
 
-def bbox_diou(output, target, x1y1x2y2=False):
+def bbox_diou(box1, box2, x1y1x2y2=False):
     """
-        Returns the Distance IoU of two bounding boxes
+    Returns the IoU of two bounding boxes
     """
+    N, M = len(box1), len(box2)
     if x1y1x2y2:
         # Get the coordinates of bounding boxes
-        x1, y1, x2, y2 = output[:, 0], output[:, 1], output[:, 2], output[:, 3]
-        x1g, y1g, x2g, y2g = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+        b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+        b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
     else:
         # Transform from center and width to exact coordinates
-        x1, x2 = output[:, 0] - output[:, 2] / 2, output[:, 0] + output[:, 2] / 2
-        y1, y2 = output[:, 1] - output[:, 3] / 2, output[:, 1] + output[:, 3] / 2
-        x1g, x2g = target[:, 0] - target[:, 2] / 2, target[:, 0] + target[:, 2] / 2
-        y1g, y2g = target[:, 1] - target[:, 2] / 2, target[:, 1] + target[:, 3] / 2
+        b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
+        b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
+        b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
+        b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
 
-    x2 = torch.max(x1, x2)
-    y2 = torch.max(y1, y2)
+    # get the coordinates of the intersection rectangle
+    inter_rect_x1 = torch.max(b1_x1.unsqueeze(1), b2_x1)
+    inter_rect_y1 = torch.max(b1_y1.unsqueeze(1), b2_y1)
+    inter_rect_x2 = torch.min(b1_x2.unsqueeze(1), b2_x2)
+    inter_rect_y2 = torch.min(b1_y2.unsqueeze(1), b2_y2)
+    inter_rect_diag = (inter_rect_x2 - inter_rect_x1) ** 2 + (inter_rect_y2 - inter_rect_y1) ** 2
 
-    x_p = (x2 + x1) / 2
-    y_p = (y2 + y1) / 2
-    x_g = (x1g + x2g) / 2
-    y_g = (y1g + y2g) / 2
+    # Intersection area
+    inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) * torch.clamp(inter_rect_y2 - inter_rect_y1, 0)
 
-    xkis1 = torch.max(x1, x1g)
-    ykis1 = torch.max(y1, y1g)
-    xkis2 = torch.min(x2, x2g)
-    ykis2 = torch.min(y2, y2g)
+    # Union Area
+    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
+    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1)).view(-1,1).expand(N,M)
+    b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
 
-    xc1 = torch.min(x1, x1g)
-    yc1 = torch.min(y1, y1g)
-    xc2 = torch.max(x2, x2g)
-    yc2 = torch.max(y2, y2g)
+    iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
 
-    intsctk = torch.zeros(x1.size()).to(output)
-    mask = (ykis2 > ykis1) * (xkis2 > xkis1)
-    intsctk[mask] = (xkis2[mask] - xkis1[mask]) * (ykis2[mask] - ykis1[mask])
-    unionk = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - intsctk + 1e-7
-    iouk = intsctk / unionk
+    outer_rect_x1 = torch.min(b1_x1.unsqueeze(1), b2_x1)
+    outer_rect_y1 = torch.min(b1_y1.unsqueeze(1), b2_y1)
+    outer_rect_x2 = torch.max(b1_x2.unsqueeze(1), b2_x2)
+    outer_rect_y2 = torch.max(b1_y2.unsqueeze(1), b2_y2)
+    outer_rect_diag = (outer_rect_x2 - outer_rect_x1) ** 2 + (outer_rect_y2 - outer_rect_y1) ** 2
 
-    c = ((xc2 - xc1) ** 2) + ((yc2 - yc1) ** 2) +1e-7
-    d = ((x_p - x_g) ** 2) + ((y_p - y_g) ** 2)
-    diouk = iouk - d / c
-    iouk = (1 - iouk).sum(0) / output.size(0)
-    diouk = (1 - diouk).sum(0) / output.size(0)
-
-    return iouk, diouk
+    diou = iou - inter_rect_diag / outer_rect_diag
+    return iou, diou
 
 
 def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
@@ -391,9 +386,10 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
         anchor_mesh = generate_anchor(nGh, nGw, anchor_wh, device)
         anchor_list = anchor_mesh.permute(0, 2, 3, 1).contiguous().view(-1, 4)           # Shape (nA x nGh x nGw) x 4
         #print(anchor_list.shape, gt_boxes.shape)
-        iou_pdist = bbox_iou(anchor_list, gt_boxes)                                  # Shape (nA x nGh x nGw) x Ng
-        # iou_pdist, diou_pdist = bbox_diou(anchor_list, gt_boxes)
-        # assert np.allclose(iou_pdist, iou_pdist_old)
+        iou_pdist_old = bbox_iou(anchor_list, gt_boxes)                                  # Shape (nA x nGh x nGw) x Ng
+        iou_pdist, diou_pdist = bbox_diou(anchor_list, gt_boxes)
+        assert np.allclose(iou_pdist, iou_pdist_old)
+        assert iou_pdist.shape == diou_pdist.shape
         iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                              # Shape (nA x nGh x nGw), both
 
         iou_map = iou_max.view(nA, nGh, nGw)       
