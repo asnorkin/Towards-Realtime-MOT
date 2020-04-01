@@ -388,7 +388,7 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
         #print(anchor_list.shape, gt_boxes.shape)
         iou_pdist_old = bbox_iou(anchor_list, gt_boxes)                                  # Shape (nA x nGh x nGw) x Ng
         iou_pdist, diou_pdist = bbox_diou(anchor_list, gt_boxes)
-        assert np.allclose(iou_pdist, iou_pdist_old)
+        assert torch.allclose(iou_pdist, iou_pdist_old)
         assert iou_pdist.shape == diou_pdist.shape
         iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                              # Shape (nA x nGh x nGw), both
 
