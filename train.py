@@ -42,9 +42,7 @@ def train(
                                              num_workers=8, pin_memory=True, drop_last=True, collate_fn=collate_fn) 
 
     # Initialize model
-    model = Darknet(cfg_dict, dataset.nID)
-
-    
+    model = Darknet(cfg_dict, dataset.nID, device=opt.device)
 
     cutoff = -1  # backbone reaches to cutoff layer
     start_epoch = 0
@@ -53,7 +51,7 @@ def train(
 
         # Load weights to resume from
         model.load_state_dict(checkpoint['model'])
-        model.cuda().train()
+        model.to(opt.device).train()
 
         # Set optimizer
         optimizer = torch.optim.SGD(filter(lambda x: x.requires_grad, model.parameters()), lr=opt.lr, momentum=.9)
@@ -73,7 +71,7 @@ def train(
             load_darknet_weights(model, osp.join(weights , 'yolov3-tiny.conv.15'))
             cutoff = 15
 
-        model.cuda().train()
+        model.to(opt.device).train()
 
         # Set optimizer
         optimizer = torch.optim.SGD(filter(lambda x: x.requires_grad, model.parameters()), lr=opt.lr, momentum=.9, weight_decay=1e-4)
@@ -118,7 +116,7 @@ def train(
                     g['lr'] = lr
             
             # Compute loss, compute gradient, update parameters
-            loss, components = model(imgs.cuda(), targets.cuda(), targets_len.cuda())
+            loss, components = model(imgs.to(opt.device), targets.to(opt.device), targets_len.to(opt.device))
             components = torch.mean(components.view(-1, 5),dim=0)
 
             loss = torch.mean(loss)
@@ -162,6 +160,7 @@ def train(
         # Call scheduler.step() after opimizer.step() with pytorch > 1.1.0 
         scheduler.step()
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=30, help='number of epochs')
@@ -174,6 +173,7 @@ if __name__ == '__main__':
     parser.add_argument('--test-interval', type=int, default=9, help='test interval')
     parser.add_argument('--lr', type=float, default=1e-2, help='init lr')
     parser.add_argument('--unfreeze-bn', action='store_true', help='unfreeze bn')
+    parser.add_argument('--device', type=str, default='cuda')
     opt = parser.parse_args()
 
     init_seeds()

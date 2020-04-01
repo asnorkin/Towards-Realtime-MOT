@@ -228,21 +228,69 @@ def bbox_iou(box1, box2, x1y1x2y2=False):
     return inter_area / (b1_area + b2_area - inter_area + 1e-16)
 
 
-def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw):
+def bbox_diou(output, target, x1y1x2y2=False):
+    """
+        Returns the Distance IoU of two bounding boxes
+    """
+    if x1y1x2y2:
+        # Get the coordinates of bounding boxes
+        x1, y1, x2, y2 = output[:, 0], output[:, 1], output[:, 2], output[:, 3]
+        x1g, y1g, x2g, y2g = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+    else:
+        # Transform from center and width to exact coordinates
+        x1, x2 = output[:, 0] - output[:, 2] / 2, output[:, 0] + output[:, 2] / 2
+        y1, y2 = output[:, 1] - output[:, 3] / 2, output[:, 1] + output[:, 3] / 2
+        x1g, x2g = target[:, 0] - target[:, 2] / 2, target[:, 0] + target[:, 2] / 2
+        y1g, y2g = target[:, 1] - target[:, 2] / 2, target[:, 1] + target[:, 3] / 2
+
+    x2 = torch.max(x1, x2)
+    y2 = torch.max(y1, y2)
+
+    x_p = (x2 + x1) / 2
+    y_p = (y2 + y1) / 2
+    x_g = (x1g + x2g) / 2
+    y_g = (y1g + y2g) / 2
+
+    xkis1 = torch.max(x1, x1g)
+    ykis1 = torch.max(y1, y1g)
+    xkis2 = torch.min(x2, x2g)
+    ykis2 = torch.min(y2, y2g)
+
+    xc1 = torch.min(x1, x1g)
+    yc1 = torch.min(y1, y1g)
+    xc2 = torch.max(x2, x2g)
+    yc2 = torch.max(y2, y2g)
+
+    intsctk = torch.zeros(x1.size()).to(output)
+    mask = (ykis2 > ykis1) * (xkis2 > xkis1)
+    intsctk[mask] = (xkis2[mask] - xkis1[mask]) * (ykis2[mask] - ykis1[mask])
+    unionk = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - intsctk + 1e-7
+    iouk = intsctk / unionk
+
+    c = ((xc2 - xc1) ** 2) + ((yc2 - yc1) ** 2) +1e-7
+    d = ((x_p - x_g) ** 2) + ((y_p - y_g) ** 2)
+    diouk = iouk - d / c
+    iouk = (1 - iouk).sum(0) / output.size(0)
+    diouk = (1 - diouk).sum(0) / output.size(0)
+
+    return iouk, diouk
+
+
+def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
     """
     returns nT, nCorrect, tx, ty, tw, th, tconf, tcls
     """
     nB = len(target)  # number of images in batch
 
-    txy = torch.zeros(nB, nA, nGh, nGw, 2).cuda()  # batch size, anchors, grid size
-    twh = torch.zeros(nB, nA, nGh, nGw, 2).cuda()
-    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).cuda()
-    tcls = torch.ByteTensor(nB, nA, nGh, nGw, nC).fill_(0).cuda()  # nC = number of classes
-    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).cuda() 
+    txy = torch.zeros(nB, nA, nGh, nGw, 2).to(device)  # batch size, anchors, grid size
+    twh = torch.zeros(nB, nA, nGh, nGw, 2).to(device)
+    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).to(device)
+    tcls = torch.ByteTensor(nB, nA, nGh, nGw, nC).fill_(0).to(device)  # nC = number of classes
+    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).to(device)
     for b in range(nB):
         t = target[b]
-        t_id = t[:, 1].clone().long().cuda()
-        t = t[:,[0,2,3,4,5]]
+        t_id = t[:, 1].clone().long().to(device)
+        t = t[:, [0,2,3,4,5]]
         nTb = len(t)  # number of targets
         if nTb == 0:
             continue
@@ -253,8 +301,8 @@ def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw):
         gxy[:, 1] = gxy[:, 1] * nGh
         gwh[:, 0] = gwh[:, 0] * nGw
         gwh[:, 1] = gwh[:, 1] * nGh
-        gi = torch.clamp(gxy[:, 0], min=0, max=nGw -1).long()
-        gj = torch.clamp(gxy[:, 1], min=0, max=nGh -1).long()
+        gi = torch.clamp(gxy[:, 0], min=0, max=nGw - 1).long()
+        gj = torch.clamp(gxy[:, 1], min=0, max=nGh - 1).long()
 
         # Get grid box indices and prevent overflows (i.e. 13.01 on 13 anchors)
         #gi, gj = torch.clamp(gxy.long(), min=0, max=nG - 1).t()
@@ -312,20 +360,19 @@ def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw):
     return tconf, tbox, tid
 
 
-
-def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw):
+def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
     ID_THRESH = 0.5
     FG_THRESH = 0.5
     BG_THRESH = 0.4
     nB = len(target)  # number of images in batch
     assert(len(anchor_wh)==nA)
 
-    tbox = torch.zeros(nB, nA, nGh, nGw, 4).cuda()  # batch size, anchors, grid size
-    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).cuda()
-    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).cuda() 
+    tbox = torch.zeros(nB, nA, nGh, nGw, 4).to(device)  # batch size, anchors, grid size
+    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).to(device)
+    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).to(device)
     for b in range(nB):
         t = target[b]
-        t_id = t[:, 1].clone().long().cuda()
+        t_id = t[:, 1].clone().long().to(device)
         t = t[:,[0,2,3,4,5]]
         nTb = len(t)  # number of targets
         if nTb == 0:
@@ -336,15 +383,17 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw):
         gxy[:, 1] = gxy[:, 1] * nGh
         gwh[:, 0] = gwh[:, 0] * nGw
         gwh[:, 1] = gwh[:, 1] * nGh
-        gxy[:, 0] = torch.clamp(gxy[:, 0], min=0, max=nGw -1)
-        gxy[:, 1] = torch.clamp(gxy[:, 1], min=0, max=nGh -1)
+        gxy[:, 0] = torch.clamp(gxy[:, 0], min=0, max=nGw - 1)
+        gxy[:, 1] = torch.clamp(gxy[:, 1], min=0, max=nGh - 1)
 
-        gt_boxes = torch.cat([gxy, gwh], dim=1)                                            # Shape Ngx4 (xc, yc, w, h)
+        gt_boxes = torch.cat([gxy, gwh], dim=1)                                          # Shape Ngx4 (xc, yc, w, h)
         
-        anchor_mesh = generate_anchor(nGh, nGw, anchor_wh)
-        anchor_list = anchor_mesh.permute(0,2,3,1).contiguous().view(-1, 4)              # Shpae (nA x nGh x nGw) x 4
+        anchor_mesh = generate_anchor(nGh, nGw, anchor_wh, device)
+        anchor_list = anchor_mesh.permute(0, 2, 3, 1).contiguous().view(-1, 4)           # Shape (nA x nGh x nGw) x 4
         #print(anchor_list.shape, gt_boxes.shape)
-        iou_pdist = bbox_iou(anchor_list, gt_boxes)                                      # Shape (nA x nGh x nGw) x Ng
+        iou_pdist = bbox_iou(anchor_list, gt_boxes)                                  # Shape (nA x nGh x nGw) x Ng
+        # iou_pdist, diou_pdist = bbox_diou(anchor_list, gt_boxes)
+        # assert np.allclose(iou_pdist, iou_pdist_old)
         iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                              # Shape (nA x nGh x nGw), both
 
         iou_map = iou_max.view(nA, nGh, nGw)       
@@ -371,10 +420,10 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw):
             tbox[b][fg_index] = delta_target
     return tconf, tbox, tid
 
-def generate_anchor(nGh, nGw, anchor_wh):
+def generate_anchor(nGh, nGw, anchor_wh, device='cuda'):
     nA = len(anchor_wh)
     yy, xx =torch.meshgrid(torch.arange(nGh), torch.arange(nGw))
-    xx, yy = xx.cuda(), yy.cuda()
+    xx, yy = xx.to(device), yy.to(device)
 
     mesh = torch.stack([xx, yy], dim=0)                                              # Shape 2, nGh, nGw
     mesh = mesh.unsqueeze(0).repeat(nA,1,1,1).float()                                # Shape nA x 2 x nGh x nGw
@@ -403,13 +452,13 @@ def decode_delta(delta, fg_anchor_list):
     gh = ph * torch.exp(dh)
     return torch.stack([gx, gy, gw, gh], dim=1)
 
-def decode_delta_map(delta_map, anchors):
+def decode_delta_map(delta_map, anchors, device='cuda'):
     '''
     :param: delta_map, shape (nB, nA, nGh, nGw, 4)
     :param: anchors, shape (nA,4)
     '''
     nB, nA, nGh, nGw, _ = delta_map.shape
-    anchor_mesh = generate_anchor(nGh, nGw, anchors) 
+    anchor_mesh = generate_anchor(nGh, nGw, anchors, device)
     anchor_mesh = anchor_mesh.permute(0,2,3,1).contiguous()              # Shpae (nA x nGh x nGw) x 4
     anchor_mesh = anchor_mesh.unsqueeze(0).repeat(nB,1,1,1,1)
     pred_list = decode_delta(delta_map.view(-1,4), anchor_mesh.view(-1,4))

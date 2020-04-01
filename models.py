@@ -14,7 +14,7 @@ try:
 except ImportError:
     batch_norm=nn.BatchNorm2d
 
-def create_modules(module_defs):
+def create_modules(module_defs, device='cuda'):
     """
     Constructs module list of layer blocks from module configuration in module_defs
     """
@@ -78,7 +78,8 @@ def create_modules(module_defs):
             img_size = (int(hyperparams['width']),int(hyperparams['height']))
             # Define detection layer
             yolo_layer = YOLOLayer(anchors, nC, int(hyperparams['nID']), 
-                                   int(hyperparams['embedding_dim']), img_size, yolo_layer_count)
+                                   int(hyperparams['embedding_dim']), img_size,
+                                   yolo_layer_count, device)
             modules.add_module('yolo_%d' % i, yolo_layer)
             yolo_layer_count += 1
 
@@ -112,7 +113,7 @@ class Upsample(nn.Module):
 
 
 class YOLOLayer(nn.Module):
-    def __init__(self, anchors, nC, nID, nE, img_size, yolo_layer):
+    def __init__(self, anchors, nC, nID, nE, img_size, yolo_layer, device='cuda'):
         super(YOLOLayer, self).__init__()
         self.layer = yolo_layer
         nA = len(anchors)
@@ -134,7 +135,7 @@ class YOLOLayer(nn.Module):
         
         self.emb_scale = math.sqrt(2) * math.log(self.nID-1) if self.nID>1 else 1
 
-        
+        self.device = device
 
     def forward(self, p_cat,  img_size, targets=None, classifier=None, test_emb=False):
         p, p_emb = p_cat[:, :24, ...], p_cat[:, 24:, ...]
@@ -144,8 +145,8 @@ class YOLOLayer(nn.Module):
             create_grids(self, img_size, nGh, nGw)
 
             if p.is_cuda:
-                self.grid_xy = self.grid_xy.cuda()
-                self.anchor_wh = self.anchor_wh.cuda()
+                self.grid_xy = self.grid_xy.to(self.device)
+                self.anchor_wh = self.anchor_wh.to(self.device)
 
         p = p.view(nB, self.nA, self.nC + 5, nGh, nGw).permute(0, 1, 3, 4, 2).contiguous()  # prediction
         
@@ -156,10 +157,12 @@ class YOLOLayer(nn.Module):
         # Training
         if targets is not None:
             if test_emb:
-                tconf, tbox, tids = build_targets_max(targets, self.anchor_vec.cuda(), self.nA, self.nC, nGh, nGw)
+                tconf, tbox, tids = build_targets_max(targets, self.anchor_vec.to(self.device),
+                                                      self.nA, self.nC, nGh, nGw, self.device)
             else:
-                tconf, tbox, tids = build_targets_thres(targets, self.anchor_vec.cuda(), self.nA, self.nC, nGh, nGw)
-            tconf, tbox, tids = tconf.cuda(), tbox.cuda(), tids.cuda()
+                tconf, tbox, tids = build_targets_thres(targets, self.anchor_vec.to(self.device),
+                                                        self.nA, self.nC, nGh, nGw, self.device)
+            tconf, tbox, tids = tconf.to(self.device), tbox.to(self.device), tids.to(self.device)
             mask = tconf > 0
 
             # Compute losses
@@ -172,7 +175,7 @@ class YOLOLayer(nn.Module):
                 FT = torch.cuda.FloatTensor if p_conf.is_cuda else torch.FloatTensor
                 lbox, lconf =  FT([0]), FT([0])
             lconf =  self.SoftmaxLoss(p_conf, tconf)
-            lid = torch.Tensor(1).fill_(0).squeeze().cuda()
+            lid = torch.Tensor(1).fill_(0).squeeze().to(self.device)
             emb_mask,_ = mask.max(1)
             
             # For convenience we use max(1) to decide the id, TODO: more reseanable strategy
@@ -184,7 +187,7 @@ class YOLOLayer(nn.Module):
             
             if  test_emb:
                 if np.prod(embedding.shape)==0  or np.prod(tids.shape) == 0:
-                    return torch.zeros(0, self.emb_dim+1).cuda()
+                    return torch.zeros(0, self.emb_dim+1).to(self.device)
                 emb_and_gt = torch.cat([embedding, tids.float()], dim=1)
                 return emb_and_gt
             
@@ -204,10 +207,10 @@ class YOLOLayer(nn.Module):
             p_emb = F.normalize(p_emb.unsqueeze(1).repeat(1,self.nA,1,1,1).contiguous(), dim=-1)
             #p_emb_up = F.normalize(shift_tensor_vertically(p_emb, -self.shift[self.layer]), dim=-1)
             #p_emb_down = F.normalize(shift_tensor_vertically(p_emb, self.shift[self.layer]), dim=-1)
-            p_cls = torch.zeros(nB,self.nA,nGh,nGw,1).cuda()               # Temp
+            p_cls = torch.zeros(nB,self.nA,nGh,nGw,1).to(self.device)               # Temp
             p = torch.cat([p_box, p_conf, p_cls, p_emb], dim=-1)
             #p = torch.cat([p_box, p_conf, p_cls, p_emb, p_emb_up, p_emb_down], dim=-1)
-            p[..., :4] = decode_delta_map(p[..., :4], self.anchor_vec.to(p))
+            p[..., :4] = decode_delta_map(p[..., :4], self.anchor_vec.to(p), self.device)
             p[..., :4] *= self.stride
 
             return p.view(nB, -1, p.shape[-1])
@@ -216,7 +219,7 @@ class YOLOLayer(nn.Module):
 class Darknet(nn.Module):
     """YOLOv3 object detection model"""
 
-    def __init__(self, cfg_dict, nID=0, test_emb=False):
+    def __init__(self, cfg_dict, nID=0, test_emb=False, device='cuda'):
         super(Darknet, self).__init__()
         if isinstance(cfg_dict, str):
             cfg_dict = parse_model_cfg(cfg_dict)
@@ -224,7 +227,7 @@ class Darknet(nn.Module):
         self.module_defs[0]['nID'] = nID
         self.img_size = [int(self.module_defs[0]['width']), int(self.module_defs[0]['height'])]
         self.emb_dim = int(self.module_defs[0]['embedding_dim'])
-        self.hyperparams, self.module_list = create_modules(self.module_defs)
+        self.hyperparams, self.module_list = create_modules(self.module_defs, device)
         self.loss_names = ['loss', 'box', 'conf', 'id', 'nT']
         self.losses = OrderedDict()
         for ln in self.loss_names:
@@ -232,8 +235,7 @@ class Darknet(nn.Module):
         self.test_emb = test_emb
         
         self.classifier = nn.Linear(self.emb_dim, nID) if nID>0 else None
-
-
+        self.device = device
 
     def forward(self, x, targets=None, targets_len=None):
         self.losses = OrderedDict()
@@ -275,10 +277,11 @@ class Darknet(nn.Module):
         if is_training:
             self.losses['nT'] /= 3 
             output = [o.squeeze() for o in output]
-            return sum(output), torch.Tensor(list(self.losses.values())).cuda()
+            return sum(output), torch.Tensor(list(self.losses.values())).to(self.device)
         elif self.test_emb:
             return torch.cat(output, 0)
         return torch.cat(output, 1)
+
 
 def shift_tensor_vertically(t, delta):
     # t should be a 5-D tensor (nB, nA, nH, nW, nC)
@@ -288,6 +291,7 @@ def shift_tensor_vertically(t, delta):
     else:
         res[:,:, -delta:, :, :] = t[:,:, :delta, :, :]
     return res 
+
 
 def create_grids(self, img_size, nGh, nGw):
     self.stride = img_size[0]/nGw
@@ -301,7 +305,7 @@ def create_grids(self, img_size, nGh, nGw):
     self.grid_xy = torch.stack((grid_x, grid_y), 4)
 
     # build wh gains
-    self.anchor_vec = self.anchors / self.stride
+    self.anchor_vec = self.anchors / (self.stride / 32)
     self.anchor_wh = self.anchor_vec.view(1, self.nA, 1, 1, 2)
 
 
