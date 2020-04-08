@@ -9,15 +9,15 @@ from shutil import rmtree
 
 def config_data_sources(args):
     names = [
-        # 'atletico_autofollow',
-        # 'atm_lev_autofollow',
-        # 'cag_ver_autofollow',
-        # 'inter_panoramic',
-        # 'inter_autofollow',
-        # 'mci-tot_autofollow',
-        # 'mci_autofollow',
-        # 'real_barca_autofollow',
-        # 'roma_autofollow',
+        'atletico_autofollow',
+        'atm_lev_autofollow',
+        'cag_ver_autofollow',
+        'inter_panoramic',
+        'inter_autofollow',
+        'mci-tot_autofollow',
+        'mci_autofollow',
+        'real_barca_autofollow',
+        'roma_autofollow',
         'roma_crotone_autofollow',
     ]
 
