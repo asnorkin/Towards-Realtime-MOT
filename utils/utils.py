@@ -230,7 +230,7 @@ def bbox_iou(box1, box2, x1y1x2y2=False):
 
 def bbox_diou(box1, box2, x1y1x2y2=False):
     """
-    Returns the IoU of two bounding boxes
+    Returns the DIoU of two bounding boxes
     """
     N, M = len(box1), len(box2)
     if x1y1x2y2:
@@ -268,7 +268,59 @@ def bbox_diou(box1, box2, x1y1x2y2=False):
     outer_rect_diag = (outer_rect_x2 - outer_rect_x1) ** 2 + (outer_rect_y2 - outer_rect_y1) ** 2
 
     diou = iou - inter_rect_diag / outer_rect_diag
-    return iou, diou
+    diou = torch.clamp(diou, min=-1., max=1.)
+    return diou
+
+
+def bbox_ciou(box1, box2, x1y1x2y2=False):
+    """
+    Returns the CIoU of two bounding boxes
+    """
+    N, M = len(box1), len(box2)
+    if x1y1x2y2:
+        # Get the coordinates of bounding boxes
+        b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+        b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+    else:
+        # Transform from center and width to exact coordinates
+        b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
+        b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
+        b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
+        b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
+
+    # get the coordinates of the intersection rectangle
+    inter_rect_x1 = torch.max(b1_x1.unsqueeze(1), b2_x1)
+    inter_rect_y1 = torch.max(b1_y1.unsqueeze(1), b2_y1)
+    inter_rect_x2 = torch.min(b1_x2.unsqueeze(1), b2_x2)
+    inter_rect_y2 = torch.min(b1_y2.unsqueeze(1), b2_y2)
+    inter_rect_diag = (inter_rect_x2 - inter_rect_x1) ** 2 + (inter_rect_y2 - inter_rect_y1) ** 2
+
+    # Intersection area
+    inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) * torch.clamp(inter_rect_y2 - inter_rect_y1, 0)
+
+    # Union Area
+    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
+    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1)).view(-1,1).expand(N,M)
+    b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
+
+    iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
+
+    outer_rect_x1 = torch.min(b1_x1.unsqueeze(1), b2_x1)
+    outer_rect_y1 = torch.min(b1_y1.unsqueeze(1), b2_y1)
+    outer_rect_x2 = torch.max(b1_x2.unsqueeze(1), b2_x2)
+    outer_rect_y2 = torch.max(b1_y2.unsqueeze(1), b2_y2)
+    outer_rect_diag = (outer_rect_x2 - outer_rect_x1) ** 2 + (outer_rect_y2 - outer_rect_y1) ** 2
+    u = inter_rect_diag / outer_rect_diag
+
+    b1_w, b1_h = b1_x2 - b1_x1, b1_y2 - b1_y1
+    b2_w, b2_h = b2_x2 - b2_x1, b2_y2 - b2_y1
+    arctan = torch.atan(b2_w / b2_h) - torch.atan(b1_w / b1_h)
+    v = torch.pow(arctan / (np.pi / 2), 2)
+    alpha = v / (1 - iou + v + 1e-8)
+    ciou = iou - u - alpha * v
+    ciou = torch.clamp(ciou, min=-1., max=1.)
+
+    return ciou
 
 
 def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
@@ -360,7 +412,7 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
     FG_THRESH = 0.5
     BG_THRESH = 0.4
     nB = len(target)  # number of images in batch
-    assert(len(anchor_wh)==nA)
+    assert len(anchor_wh) == nA
 
     tbox = torch.zeros(nB, nA, nGh, nGw, 4).to(device)  # batch size, anchors, grid size
     tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).to(device)
@@ -386,11 +438,8 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
         anchor_mesh = generate_anchor(nGh, nGw, anchor_wh, device)
         anchor_list = anchor_mesh.permute(0, 2, 3, 1).contiguous().view(-1, 4)           # Shape (nA x nGh x nGw) x 4
         #print(anchor_list.shape, gt_boxes.shape)
-        iou_pdist_old = bbox_iou(anchor_list, gt_boxes)                                  # Shape (nA x nGh x nGw) x Ng
-        iou_pdist, diou_pdist = bbox_diou(anchor_list, gt_boxes)
-        assert torch.allclose(iou_pdist, iou_pdist_old)
-        assert iou_pdist.shape == diou_pdist.shape
-        iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                              # Shape (nA x nGh x nGw), both
+        iou_pdist = bbox_iou(anchor_list, gt_boxes)
+        iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                             # Shape (nA x nGh x nGw), both
 
         iou_map = iou_max.view(nA, nGh, nGw)       
         gt_index_map = max_gt_index.view(nA, nGh, nGw)
@@ -410,7 +459,7 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
         gt_id_list = t_id[gt_index_map[id_index]]
         #print(gt_index.shape, gt_index_map[id_index].shape, gt_boxes.shape)
         if torch.sum(fg_index) > 0:
-            tid[b][id_index] =  gt_id_list.unsqueeze(1)
+            tid[b][id_index] = gt_id_list.unsqueeze(1)
             fg_anchor_list = anchor_list.view(nA, nGh, nGw, 4)[fg_index] 
             delta_target = encode_delta(gt_box_list, fg_anchor_list)
             tbox[b][fg_index] = delta_target
