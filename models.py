@@ -14,6 +14,7 @@ try:
 except ImportError:
     batch_norm=nn.BatchNorm2d
 
+
 def create_modules(module_defs, device='cuda'):
     """
     Constructs module list of layer blocks from module configuration in module_defs
@@ -116,11 +117,10 @@ class YOLOLayer(nn.Module):
     def __init__(self, anchors, nC, nID, nE, img_size, yolo_layer, device='cuda'):
         super(YOLOLayer, self).__init__()
         self.layer = yolo_layer
-        nA = len(anchors)
         self.anchors = torch.FloatTensor(anchors)
-        self.nA = nA  # number of anchors (3)
-        self.nC = nC  # number of classes (80)
-        self.nID = nID # number of identities
+        self.nA = len(anchors)  # number of anchors (3)
+        self.nC = nC            # number of classes (80)
+        self.nID = nID          # number of identities
         self.img_size = 0
         self.emb_dim = nE 
         self.shift = [1, 3, 5]
@@ -138,7 +138,8 @@ class YOLOLayer(nn.Module):
         self.device = device
 
     def forward(self, p_cat,  img_size, targets=None, classifier=None, test_emb=False):
-        p, p_emb = p_cat[:, :24, ...], p_cat[:, 24:, ...]
+        pred_len = (4 + 1 + self.nC) * self.nA
+        p, p_emb = p_cat[:, :pred_len, ...], p_cat[:, pred_len:, ...]
         nB, nGh, nGw = p.shape[0], p.shape[-2], p.shape[-1]
 
         if self.img_size != img_size:
@@ -170,22 +171,24 @@ class YOLOLayer(nn.Module):
             nM = mask.sum().float()  # number of anchors (assigned to targets)
             nP = torch.ones_like(mask).sum().float()
             if nM > 0:
-                lbox = self.SmoothL1Loss(p_box[mask], tbox[mask])
+                # lbox = self.SmoothL1Loss(p_box[mask], tbox[mask])
+                ious = torch.diag(bbox_iou(p_box[mask], tbox[mask]))
+                lbox = torch.mean(1. - ious)
             else:
                 FT = torch.cuda.FloatTensor if p_conf.is_cuda else torch.FloatTensor
                 lbox, lconf =  FT([0]), FT([0])
             lconf =  self.SoftmaxLoss(p_conf, tconf)
             lid = torch.Tensor(1).fill_(0).squeeze().to(self.device)
-            emb_mask,_ = mask.max(1)
+            emb_mask, _ = mask.max(1)
             
             # For convenience we use max(1) to decide the id, TODO: more reseanable strategy
-            tids,_ = tids.max(1) 
+            tids, _ = tids.max(1)
             tids = tids[emb_mask]
             embedding = p_emb[emb_mask].contiguous()
             embedding = self.emb_scale * F.normalize(embedding)
             nI = emb_mask.sum().float()
             
-            if  test_emb:
+            if test_emb:
                 if np.prod(embedding.shape)==0  or np.prod(tids.shape) == 0:
                     return torch.zeros(0, self.emb_dim+1).to(self.device)
                 emb_and_gt = torch.cat([embedding, tids.float()], dim=1)
@@ -234,7 +237,7 @@ class Darknet(nn.Module):
             self.losses[ln] = 0
         self.test_emb = test_emb
         
-        self.classifier = nn.Linear(self.emb_dim, nID) if nID>0 else None
+        self.classifier = nn.Linear(self.emb_dim, nID) if nID > 0 else None
         self.device = device
 
     def forward(self, x, targets=None, targets_len=None):
