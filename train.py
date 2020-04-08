@@ -1,6 +1,7 @@
 import argparse
 import json
 import time
+import warnings
 
 import test  
 from models import *
@@ -8,6 +9,9 @@ from utils.datasets import JointDataset, collate_fn
 from utils.utils import *
 from utils.log import logger
 from torchvision.transforms import transforms as T
+
+
+warnings.filterwarnings('ignore')
 
 
 def train(
