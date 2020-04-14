@@ -12,13 +12,12 @@ def config_data_sources(args):
         'atletico_autofollow',
         'atm_lev_autofollow',
         'cag_ver_autofollow',
-        'inter_panoramic',
         'inter_autofollow',
+        'inter_panoramic',
         'mci-tot_autofollow',
         'mci_autofollow',
         'real_barca_autofollow',
         'roma_autofollow',
-        'roma_crotone_autofollow',
     ]
 
     return [
