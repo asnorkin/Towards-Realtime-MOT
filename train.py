@@ -3,7 +3,7 @@ import json
 import time
 import warnings
 
-import test  
+import test
 from models import *
 from utils.datasets import JointDataset, collate_fn
 from utils.utils import *
@@ -24,7 +24,7 @@ def train(
         freeze_backbone=False,
         opt=None,
 ):
-    weights = 'weights' 
+    weights = 'weights'
     mkdir_if_missing(weights)
     latest = osp.join(weights, 'latest.pt')
 
@@ -36,7 +36,7 @@ def train(
     trainset_paths = data_config['train']
     dataset_root = data_config['root']
     f.close()
-    cfg_dict = parse_model_cfg(cfg) 
+    cfg_dict = parse_model_cfg(cfg)
     img_size = [int(cfg_dict[0]['width']), int(cfg_dict[0]['height'])]
 
     # Get dataloader
@@ -49,7 +49,7 @@ def train(
     model = Darknet(cfg_dict, dataset.nID, device=opt.device)
 
     cutoff = -1  # backbone reaches to cutoff layer
-    start_epoch = 0
+    start_epoch = 1
     if resume:
         checkpoint = torch.load(latest, map_location='cpu')
 
@@ -82,23 +82,23 @@ def train(
 
     model = torch.nn.DataParallel(model)
     # Set scheduler
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, 
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
             milestones=[int(0.5*opt.epochs), int(0.75*opt.epochs)], gamma=0.1)
-    
-    # An important trick for detection: freeze bn during fine-tuning 
+
+    # An important trick for detection: freeze bn during fine-tuning
     if not opt.unfreeze_bn:
         for i, (name, p) in enumerate(model.named_parameters()):
             p.requires_grad = False if 'batch_norm' in name else True
 
     model_info(model)
-       
+
     t0 = time.time()
     for epoch in range(epochs):
         epoch += start_epoch
 
         logger.info(('%8s%12s' + '%10s' * 6) % (
             'Epoch', 'Batch', 'box', 'conf', 'id', 'total', 'nTargets', 'time'))
-        
+
         # Freeze darknet53.conv.74 for first epoch
         if freeze_backbone and (epoch < 2):
             for i, (name, p) in enumerate(model.named_parameters()):
@@ -111,14 +111,14 @@ def train(
         for i, (imgs, targets, _, _, targets_len) in enumerate(dataloader):
             if sum([len(x) for x in targets]) < 1:  # if no targets continue
                 continue
-            
+
             # SGD burn-in
             burnin = min(1000, len(dataloader))
             if (epoch == 0) & (i <= burnin):
-                lr = opt.lr * (i / burnin) **4 
+                lr = opt.lr * (i / burnin) **4
                 for g in optimizer.param_groups:
                     g['lr'] = lr
-            
+
             # Compute loss, compute gradient, update parameters
             loss, components = model(imgs.to(opt.device), targets.to(opt.device), targets_len.to(opt.device))
             components = torch.mean(components.view(-1, 5),dim=0)
@@ -133,7 +133,7 @@ def train(
 
             # Running epoch-means of tracked metrics
             ui += 1
-            
+
             for ii, key in enumerate(model.module.loss_names):
                 rloss[key] = (rloss[key] * ui + components[ii]) / (ui + 1)
 
@@ -146,7 +146,7 @@ def train(
             t0 = time.time()
             if i % opt.print_interval == 0:
                 logger.info(s)
-        
+
         # Save latest checkpoint
         checkpoint = {'epoch': epoch,
                       'model': model.module.state_dict(),
@@ -161,7 +161,7 @@ def train(
                 test.test_emb(cfg, data_cfg, weights=latest, batch_size=batch_size, print_interval=40)
 
 
-        # Call scheduler.step() after opimizer.step() with pytorch > 1.1.0 
+        # Call scheduler.step() after opimizer.step() with pytorch > 1.1.0
         scheduler.step()
 
 
