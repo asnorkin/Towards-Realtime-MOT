@@ -299,7 +299,6 @@ def bbox_ciou(box1, box2, x1y1x2y2=False):
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) * torch.clamp(inter_rect_y2 - inter_rect_y1, 0)
 
     # Union Area
-    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
     b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1)).view(-1,1).expand(N,M)
     b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
 
@@ -314,7 +313,9 @@ def bbox_ciou(box1, box2, x1y1x2y2=False):
 
     b1_w, b1_h = b1_x2 - b1_x1, b1_y2 - b1_y1
     b2_w, b2_h = b2_x2 - b2_x1, b2_y2 - b2_y1
-    arctan = torch.atan(b2_w / b2_h) - torch.atan(b1_w / b1_h)
+    b1_atan = torch.atan(b1_w / b1_h).view(-1,1).expand(N,M)
+    b2_atan = torch.atan(b2_w / b2_h).view(1,-1).expand(N,M)
+    arctan = b2_atan - b1_atan
     v = torch.pow(arctan / (np.pi / 2), 2)
     alpha = v / (1 - iou + v + 1e-8)
     ciou = iou - u - alpha * v

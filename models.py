@@ -172,7 +172,7 @@ class YOLOLayer(nn.Module):
             nP = torch.ones_like(mask).sum().float()
             if nM > 0:
                 # lbox = self.SmoothL1Loss(p_box[mask], tbox[mask])
-                ious = torch.diag(bbox_iou(p_box[mask], tbox[mask]))
+                ious = torch.diag(bbox_ciou(p_box[mask], tbox[mask]))
                 lbox = torch.mean(1. - ious)
             else:
                 FT = torch.cuda.FloatTensor if p_conf.is_cuda else torch.FloatTensor
