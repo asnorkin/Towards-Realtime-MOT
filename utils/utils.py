@@ -249,14 +249,13 @@ def bbox_diou(box1, box2, x1y1x2y2=False):
     inter_rect_y1 = torch.max(b1_y1.unsqueeze(1), b2_y1)
     inter_rect_x2 = torch.min(b1_x2.unsqueeze(1), b2_x2)
     inter_rect_y2 = torch.min(b1_y2.unsqueeze(1), b2_y2)
-    inter_rect_diag = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) ** 2 + \
-                      torch.clamp(inter_rect_y2 - inter_rect_y1, 0) ** 2
+    # inter_rect_diag = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) ** 2 + \
+    #                   torch.clamp(inter_rect_y2 - inter_rect_y1, 0) ** 2
 
     # Intersection area
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) * torch.clamp(inter_rect_y2 - inter_rect_y1, 0)
 
     # Union Area
-    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
     b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1)).view(-1,1).expand(N,M)
     b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
 
@@ -268,7 +267,14 @@ def bbox_diou(box1, box2, x1y1x2y2=False):
     outer_rect_y2 = torch.max(b1_y2.unsqueeze(1), b2_y2)
     outer_rect_diag = (outer_rect_x2 - outer_rect_x1) ** 2 + (outer_rect_y2 - outer_rect_y1) ** 2
 
-    diou = iou - inter_rect_diag / outer_rect_diag
+    b1_w, b1_h = b1_x2 - b1_x1, b1_y2 - b1_y1
+    b2_w, b2_h = b2_x2 - b2_x1, b2_y2 - b2_y1
+    b1_xc, b1_yc = b1_x1 + b1_w / 2, b1_y1 + b1_h / 2
+    b2_xc, b2_yc = b2_x1 + b2_w / 2, b2_y1 + b2_h / 2
+    centers_dist = (b1_xc.unsqueeze(1) - b2_xc) ** 2 + (b1_yc.unsqueeze(1) - b2_yc) ** 2
+    u = centers_dist / outer_rect_diag
+
+    diou = iou - u
     diou = torch.clamp(diou, min=-1., max=1.)
     return diou
 
@@ -311,12 +317,16 @@ def bbox_ciou(box1, box2, x1y1x2y2=False):
     outer_rect_x2 = torch.max(b1_x2.unsqueeze(1), b2_x2)
     outer_rect_y2 = torch.max(b1_y2.unsqueeze(1), b2_y2)
     outer_rect_diag = (outer_rect_x2 - outer_rect_x1) ** 2 + (outer_rect_y2 - outer_rect_y1) ** 2
-    u = inter_rect_diag / outer_rect_diag
 
     b1_w, b1_h = b1_x2 - b1_x1, b1_y2 - b1_y1
     b2_w, b2_h = b2_x2 - b2_x1, b2_y2 - b2_y1
-    b1_atan = torch.atan(b1_w / b1_h).view(-1,1).expand(N,M)
-    b2_atan = torch.atan(b2_w / b2_h).view(1,-1).expand(N,M)
+    b1_xc, b1_yc = b1_x1 + b1_w / 2, b1_y1 + b1_h / 2
+    b2_xc, b2_yc = b2_x1 + b2_w/ 2, b2_y1 + b2_h / 2
+    centers_dist = (b1_xc.unsqueeze(1) - b2_xc) ** 2 + (b1_yc.unsqueeze(1) - b2_yc) ** 2
+    u = centers_dist / outer_rect_diag
+
+    b1_atan = torch.atan(b1_w / b1_h).view(-1 ,1).expand(N, M)
+    b2_atan = torch.atan(b2_w / b2_h).view(1, -1).expand(N, M)
     arctan = b2_atan - b1_atan
     v = torch.pow(arctan / (np.pi / 2), 2)
     alpha = v / (1 - iou + v + 1e-8)
