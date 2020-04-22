@@ -3,6 +3,7 @@ from collections import defaultdict,OrderedDict
 
 import torch.nn as nn
 
+from utils.log import logger
 from utils.parse_config import *
 from utils.utils import *
 import time
@@ -121,7 +122,7 @@ class YOLOLayer(nn.Module):
         self.nA = len(anchors)  # number of anchors (3)
         self.nC = nC            # number of classes (80)
         self.nID = nID          # number of identities
-        self.img_size = 0
+        self.img_size = img_size
         self.emb_dim = nE 
         self.shift = [1, 3, 5]
 
@@ -172,11 +173,18 @@ class YOLOLayer(nn.Module):
             nP = torch.ones_like(mask).sum().float()
             if nM > 0:
                 # lbox = self.SmoothL1Loss(p_box[mask], tbox[mask])
-                ious = torch.diag(bbox_ciou(p_box[mask], tbox[mask]))
-                lbox = torch.mean(1. - ious)
+                beta = self.stride / (self.img_size if isinstance(self.img_size, int) else self.img_size[0])
+                tb = (decode_delta_map(tbox, self.anchor_vec.to(tbox), self.device) * beta)[mask]
+                pb = (decode_delta_map(p_box, self.anchor_vec.to(p_box), self.device) * beta)[mask]
+                ious, cious = bbox_ciou(pb, tb)
+                iou, ciou = torch.mean(torch.diag(ious)), torch.mean(torch.diag(cious))
+                logger.info('!: {:.3f}'.format(iou))
+                lbox = 1. - ciou
             else:
+                logger.info('!!')
                 FT = torch.cuda.FloatTensor if p_conf.is_cuda else torch.FloatTensor
                 lbox, lconf =  FT([0]), FT([0])
+                iou, ciou = FT([1]), FT([1])
             lconf =  self.SoftmaxLoss(p_conf, tconf)
             lid = torch.Tensor(1).fill_(0).squeeze().to(self.device)
             emb_mask, _ = mask.max(1)
@@ -199,11 +207,11 @@ class YOLOLayer(nn.Module):
                 lid =  self.IDLoss(logits, tids.squeeze())
 
             # Sum loss components
-            loss = torch.exp(-self.s_r)*lbox + torch.exp(-self.s_c)*lconf + torch.exp(-self.s_id)*lid + \
+            loss = 0.02 * torch.exp(-self.s_r)*lbox + torch.exp(-self.s_c)*lconf + torch.exp(-self.s_id)*lid + \
                    (self.s_r + self.s_c + self.s_id)
             loss *= 0.5
-
-            return loss, loss.item(), lbox.item(), lconf.item(), lid.item(), nT
+            logger.info('iou: {:.3f}'.format(iou.item()))
+            return loss, loss.item(), lbox.item(), lconf.item(), lid.item(), nT, iou.item(), ciou.item()
 
         else:
             p_conf = torch.softmax(p_conf, dim=1)[:,1,...].unsqueeze(-1)
@@ -231,7 +239,7 @@ class Darknet(nn.Module):
         self.img_size = [int(self.module_defs[0]['width']), int(self.module_defs[0]['height'])]
         self.emb_dim = int(self.module_defs[0]['embedding_dim'])
         self.hyperparams, self.module_list = create_modules(self.module_defs, device)
-        self.loss_names = ['loss', 'box', 'conf', 'id', 'nT']
+        self.loss_names = ['loss', 'box', 'conf', 'id', 'nT', 'iou', 'ciou']
         self.losses = OrderedDict()
         for ln in self.loss_names:
             self.losses[ln] = 0

@@ -7,9 +7,12 @@ import os.path as osp
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+#import pdb
 import torch
 import torch.nn.functional as F
 from torchvision.ops import nms
+
+from utils.log import logger
 
 
 def mkdir_if_missing(dir):
@@ -311,6 +314,8 @@ def bbox_ciou(box1, box2, x1y1x2y2=False):
     b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
 
     iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
+#    if not np.all(np.isfinite(iou.cpu().data.numpy())):
+#        pdb.set_trace()
 
     outer_rect_x1 = torch.min(b1_x1.unsqueeze(1), b2_x1)
     outer_rect_y1 = torch.min(b1_y1.unsqueeze(1), b2_y1)
@@ -331,9 +336,15 @@ def bbox_ciou(box1, box2, x1y1x2y2=False):
     v = torch.pow(arctan / (np.pi / 2), 2)
     alpha = v / (1 - iou + v + 1e-8)
     ciou = iou - u - alpha * v
-    ciou = torch.clamp(ciou, min=-1., max=1.)
 
-    return ciou
+    neg_w1_count = torch.where(box1[:, 2] < 0)[0].shape[0]
+    neg_h1_count = torch.where(box1[:, 3] < 0)[0].shape[0]
+    neg_w2_count = torch.where(box2[:, 2] < 0)[0].shape[0]
+    neg_h2_count = torch.where(box2[:, 3] < 0)[0].shape[0]
+#    logger.info('Debug: iou={:.4f}\tu={:.4f}\talphav={:.4f}\tciou={:.4f}\tnegw1={}\tnegh1={}\tnegw2={}\tnegh2={}'.format(torch.mean(iou), torch.mean(u), torch.mean(alpha * v), torch.mean(ciou), neg_w1_count, neg_h1_count, neg_w2_count, neg_h2_count))
+    ciou = torch.clamp(ciou, min=-1, max=1.)
+
+    return iou, ciou
 
 
 def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
@@ -421,9 +432,9 @@ def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
 
 
 def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw, device='cuda'):
-    ID_THRESH = 0.5
-    FG_THRESH = 0.5
-    BG_THRESH = 0.4
+    ID_THRESH = 0.7
+    FG_THRESH = 0.7
+    BG_THRESH = 0.6
     nB = len(target)  # number of images in batch
     assert len(anchor_wh) == nA
 

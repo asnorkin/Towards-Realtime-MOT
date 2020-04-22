@@ -96,8 +96,8 @@ def train(
     for epoch in range(epochs):
         epoch += start_epoch
 
-        logger.info(('%8s%12s' + '%10s' * 6) % (
-            'Epoch', 'Batch', 'box', 'conf', 'id', 'total', 'nTargets', 'time'))
+        logger.info(('%8s%12s' + '%10s' * 8) % (
+            'Epoch', 'Batch', 'box', 'conf', 'id', 'total', 'nTargets', 'iou', 'ciou', 'time'))
 
         # Freeze darknet53.conv.74 for first epoch
         if freeze_backbone and (epoch < 2):
@@ -121,7 +121,8 @@ def train(
 
             # Compute loss, compute gradient, update parameters
             loss, components = model(imgs.to(opt.device), targets.to(opt.device), targets_len.to(opt.device))
-            components = torch.mean(components.view(-1, 5),dim=0)
+            logger.info('component iou: {}'.format(components.view(-1, 7)))
+            components = torch.mean(components.view(-1, 7), dim=0)
 
             loss = torch.mean(loss)
             loss.backward()
@@ -135,14 +136,17 @@ def train(
             ui += 1
 
             for ii, key in enumerate(model.module.loss_names):
+                if key == 'iou':
+                    logger.info('iou: {:.3f}'.format(components[ii]))
                 rloss[key] = (rloss[key] * ui + components[ii]) / (ui + 1)
 
-            s = ('%8s%12s' + '%10.3g' * 6) % (
+            s = ('%8s%12s' + '%10.3g' * 8) % (
                 '%g/%g' % (epoch, epochs - 1),
                 '%g/%g' % (i, len(dataloader) - 1),
                 rloss['box'], rloss['conf'],
-                rloss['id'],rloss['loss'],
-                rloss['nT'], time.time() - t0)
+                rloss['id'], rloss['loss'],
+                rloss['nT'], rloss['iou'],
+                rloss['ciou'], time.time() - t0)
             t0 = time.time()
             if i % opt.print_interval == 0:
                 logger.info(s)

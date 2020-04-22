@@ -18,6 +18,7 @@ def config_data_sources(args):
         'mci_autofollow',
         'real_barca_autofollow',
         'roma_autofollow',
+        'roma_crotone_autofollow'
     ]
 
     return [
@@ -114,13 +115,15 @@ def main(args):
         for full_image, full_label, full_index in read(source):
             val = np.random.binomial(1, args.val_size, size=1).astype(np.bool)
             key = 'val' if val else 'train'
+            clids = [lbl[0] for lbl in full_label]
+            old = len(clids) > 0 and max(clids) < 8
+            if old:
+                print('Old label: {}'.format(full_index))
+
             for split_image, split_label, split_index, _split_x in split(full_image, full_label, args.n_splits, args.min_overlap):
                 name = '{}{}_{}'.format(source['prefix'], full_index, split_index)
                 image_file = osp.join(datadir, name + '.jpg')
                 cv.imwrite(image_file, split_image)
-
-                clids = [lbl[0] for lbl in split_label]
-                old = len(clids) > 0 and max(clids) < 8
 
                 label_file = osp.join(datadir, name + '.txt')
                 with open(label_file, 'w+') as outf:
